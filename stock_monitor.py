@@ -1,9 +1,6 @@
 import asyncio
 from typing import Dict, List, Optional
-from datetime import datetime, timedelta
-import pytz
-from tinkoff.invest import AsyncClient, CandleInterval
-from tinkoff.invest.utils import now
+from tinkoff.invest import AsyncClient
 from database import Database
 
 
