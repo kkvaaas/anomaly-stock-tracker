@@ -1,0 +1,10 @@
+{
+    "telegram_token": "8133159439:AAEM9ca5jr9CmLFDe8_Zw5pYm3vZcP38T4k",
+    "stocks": [
+        "AAPL"
+    ],
+    "exchange": "NASDAQ",
+    "anomaly_threshold": 1.0,
+    "check_interval": 10,
+    "chat_id": 942761201
+}
