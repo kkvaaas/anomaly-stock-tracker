@@ -16,7 +16,7 @@ class Database:
                 CREATE TABLE IF NOT EXISTS users (
                     chat_id TEXT PRIMARY KEY,
                     token TEXT,
-                    stocks TEXT  # Храним как JSON-массив
+                    stocks TEXT
                 )
                 """
             )
@@ -71,3 +71,4 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
             conn.commit()
+
