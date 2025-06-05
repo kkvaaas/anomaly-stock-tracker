@@ -1,5 +1,3 @@
-import random
-
 import matplotlib.pyplot as plt
 import io
 from typing import List, Tuple

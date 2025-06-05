@@ -17,8 +17,8 @@ class Database:
                     chat_id TEXT PRIMARY KEY,
                     token TEXT,
                     stocks TEXT,
-                    interval_minutes INTEGER DEFAULT 5,
-                    threshold_percent REAL DEFAULT 5.0
+                    interval_minutes INTEGER,  
+                    threshold_percent REAL
                 )
                 """
             )
