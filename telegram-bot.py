@@ -6,6 +6,8 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
 from database import Database
 from stock_monitor import StockMonitor
+from tinkoff.invest import AsyncClient
+from tinkoff.invest.exceptions import RequestError
 
 class NotificationManager:
     def __init__(self, bot: Bot):
@@ -50,6 +52,18 @@ threshold_keyboard = ReplyKeyboardMarkup(
     resize_keyboard=True
 )
 
+async def check_stock_exists(ticker: str, token: str) -> bool:
+    """Проверяет существование акции через Tinkoff Invest API"""
+    try:
+        async with AsyncClient(token) as client:
+            instruments = await client.instruments.find_instrument(query=ticker)
+            for instrument in instruments.instruments:
+                if instrument.ticker == ticker and instrument.instrument_type == "share":
+                    return True
+        return False
+    except RequestError:
+        return False
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     await message.answer("Привет! Для начала работы отправьте ваш токен Тинькофф Инвестиций:")
@@ -63,23 +77,52 @@ async def process_token(message: types.Message, state: FSMContext):
 
 @dp.message(Form.waiting_for_stocks)
 async def process_stocks(message: types.Message, state: FSMContext):
+    user_data = await state.get_data()
+    token = user_data.get("token")
+    
     stocks = [s.strip().upper() for s in message.text.split(",")]
-    await state.update_data(stocks=stocks)
+    
+    # Проверяем существование каждой акции
+    invalid_stocks = []
+    valid_stocks = []
+    
+    for ticker in stocks:
+        if await check_stock_exists(ticker, token):
+            valid_stocks.append(ticker)
+        else:
+            invalid_stocks.append(ticker)
+    
+    if invalid_stocks:
+        await message.answer(
+            f"Следующие тикеры не найдены или не являются акциями: {', '.join(invalid_stocks)}\n"
+            f"Пожалуйста, введите только существующие тикеры акций:"
+        )
+        return
+    
+    if not valid_stocks:
+        await message.answer("Не найдено ни одного валидного тикера. Пожалуйста, попробуйте снова.")
+        return
+    
+    await state.update_data(stocks=valid_stocks)
     await message.answer("Выберите интервал проверки (в минутах):", reply_markup=interval_keyboard)
     await state.set_state(Form.waiting_for_interval)
 
-@dp.message(Form.waiting_for_interval, F.text.in_(["1", "3", "5", "10"]))
-async def process_interval_valid(message: types.Message, state: FSMContext):
+@dp.message(Form.waiting_for_interval)
+async def process_interval(message: types.Message, state: FSMContext):
+    if message.text not in ["1", "3", "5", "10"]:
+        await message.answer("Пожалуйста, выберите один из предложенных вариантов (1, 3, 5, 10):")
+        return
+    
     await state.update_data(interval=int(message.text))
     await message.answer("Выберите порог изменения цены (%):", reply_markup=threshold_keyboard)
     await state.set_state(Form.waiting_for_threshold)
 
-@dp.message(Form.waiting_for_interval)
-async def process_interval_invalid(message: types.Message):
-    await message.answer("Пожалуйста, выберите один из предложенных вариантов (1, 3, 5, 10):")
-
-@dp.message(Form.waiting_for_threshold, F.text.in_(["3", "5", "7", "10"]))
-async def process_threshold_valid(message: types.Message, state: FSMContext):
+@dp.message(Form.waiting_for_threshold)
+async def process_threshold(message: types.Message, state: FSMContext):
+    if message.text not in ["3", "5", "7", "10"]:
+        await message.answer("Пожалуйста, выберите один из предложенных вариантов (3, 5, 7, 10):")
+        return
+    
     user_data = await state.get_data()
     
     # Сохраняем пользователя в БД
@@ -92,14 +135,12 @@ async def process_threshold_valid(message: types.Message, state: FSMContext):
     )
     
     # Запускаем мониторинг
-    asyncio.create_task(
-        monitor.check_anomaly(
-            chat_id=str(message.chat.id),
-            token=user_data["token"],
-            stocks=user_data["stocks"],
-            interval_minutes=user_data["interval"],
-            threshold_percent=float(message.text)
-        )
+    await monitor.start_monitoring_for_user(
+        chat_id=str(message.chat.id),
+        token=user_data["token"],
+        stocks=user_data["stocks"],
+        interval_minutes=user_data["interval"],
+        threshold_percent=float(message.text)
     )
     
     await message.answer(
@@ -111,21 +152,14 @@ async def process_threshold_valid(message: types.Message, state: FSMContext):
     )
     await state.clear()
 
-@dp.message(Form.waiting_for_threshold)
-async def process_threshold_invalid(message: types.Message):
-    await message.answer("Пожалуйста, выберите один из предложенных вариантов (3, 5, 7, 10):")
-
-async def on_startup(dp):
+async def on_startup():
     # Запускаем мониторинг при старте бота
-    task  = asyncio.create_task(monitor.start_monitoring_for_all_users())
-    await asyncio.gather(task)
+    await monitor.start_monitoring_for_all_users()
 
 async def main():
     # Зарегистрируем обработчик запуска
     dp.startup.register(on_startup)
     await dp.start_polling(bot)
 
-
 if __name__ == "__main__":
     asyncio.run(main())
-
