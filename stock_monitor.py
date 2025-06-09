@@ -1,5 +1,6 @@
 import asyncio
-from typing import Dict, List, Optional
+from typing import List, Optional, Dict, Tuple
+from datetime import datetime
 from tinkoff.invest import AsyncClient
 from database import Database
 
@@ -7,14 +8,15 @@ from database import Database
 class StockMonitor:
     def __init__(self, notification_manager):
         self.notification_manager = notification_manager
-        self.last_prices = {}  # Общий словарь для всех пользователей
+        # Словарь для хранения последних цен и времени запроса: {ticker: (price, timestamp)}
+        self.last_data: Dict[   str, Tuple[float, datetime]] = {}
         self.user_settings = {}  # Храним настройки пользователей
         self.monitor_tasks = {}  # Храним задачи мониторинга по chat_id
         self.db = Database()
         self.lock = asyncio.Lock()  # Для безопасного доступа к общим данным
 
-    async def fetch_stock_price(self, token: str, ticker: str) -> Optional[float]:
-        """Получает текущую цену акции через Tinkoff API."""
+    async def fetch_stock_price(self, token: str, ticker: str) -> Optional[Tuple[float, datetime]]:
+        """Получает текущую цену акции через Tinkoff API и возвращает кортеж (цена, время запроса)."""
         try:
             async with AsyncClient(token) as client:
                 instruments = await client.instruments.shares()
@@ -27,7 +29,8 @@ class StockMonitor:
                     return None
 
                 last_price = (await client.market_data.get_last_prices(figi=[figi])).last_prices[0]
-                return float(f"{last_price.price.units}.{last_price.price.nano}")
+                price = float(f"{last_price.price.units}.{last_price.price.nano}")
+                return (price, datetime.now())
         except Exception as e:
             print(f"Ошибка при запросе цены {ticker}: {e}")
             return None
@@ -43,7 +46,6 @@ class StockMonitor:
                 async with self.lock:
                     stocks_to_check = settings['stocks'].copy()
 
-                # Создаем список задач для параллельной проверки всех акций
                 tasks = []
                 for ticker in stocks_to_check:
                     task = asyncio.create_task(
@@ -51,9 +53,7 @@ class StockMonitor:
                     )
                     tasks.append(task)
                 
-                # Запускаем все задачи параллельно
                 await asyncio.gather(*tasks, return_exceptions=True)
-
                 await asyncio.sleep(settings['interval'] * 60)
 
             except asyncio.CancelledError:
@@ -64,17 +64,19 @@ class StockMonitor:
 
     async def process_single_ticker(self, chat_id: str, token: str, ticker: str, threshold: float):
         """Обрабатывает один тикер независимо от других"""
-        current_price = await self.fetch_stock_price(token, ticker)
-        print(ticker, current_price)
-        if current_price is None:
-            return  # Просто пропускаем этот тикер
+        result = await self.fetch_stock_price(token, ticker)
+        if result is None:
+            return
+        
+        current_price, timestamp = result
 
         async with self.lock:
-            prev_price = self.last_prices.get(ticker)
-            if prev_price is None:
-                self.last_prices[ticker] = current_price
+            prev_data = self.last_data.get(ticker)
+            if prev_data is None:
+                self.last_data[ticker] = (current_price, timestamp)
                 return
 
+            prev_price, prev_timestamp = prev_data
             change_percent = abs((current_price - prev_price) / prev_price) * 100
 
             if change_percent >= threshold:
@@ -83,10 +85,12 @@ class StockMonitor:
                     ticker=ticker,
                     change_percent=change_percent,
                     prev_price=prev_price,
-                    current_price=current_price
+                    current_price=current_price,
+                    timestamp=timestamp
                 )
 
-            self.last_prices[ticker] = current_price
+            self.last_data[ticker] = (current_price, timestamp)
+            print(ticker, ":", self.last_data[ticker])
 
     async def start_monitoring_for_user(self, chat_id: str, token: str, stocks: List[str], 
                                       interval_minutes: int, threshold_percent: float):
@@ -110,14 +114,42 @@ class StockMonitor:
             self.check_anomaly_for_user(chat_id)
         )
 
+    # В файле stock_monitor.py добавим обработку ошибок в start_monitoring_for_all_users
     async def start_monitoring_for_all_users(self):
-        """Запускает мониторинг для всех пользователей из БД."""
-        users = self.db.get_all_users()
-        for user in users:
-            await self.start_monitoring_for_user(
-                chat_id=user["chat_id"],
-                token=user["token"],
-                stocks=user["stocks"],
-                interval_minutes=user["interval_minutes"],
-                threshold_percent=user["threshold_percent"]
-            )
+        """Запускает мониторинг для всех пользователей из БД с обработкой ошибок."""
+        try:
+            users = self.db.get_all_users()
+            if not users:
+                print("В базе данных нет пользователей для мониторинга.")
+                return
+
+            print(f"Начинаю мониторинг для {len(users)} пользователей...")
+            
+            tasks = []
+            for user in users:
+                try:
+                    # Проверяем, что все обязательные поля есть
+                    if all(key in user for key in ['chat_id', 'token', 'stocks', 'interval_minutes', 'threshold_percent']):
+                        task = asyncio.create_task(
+                            self.start_monitoring_for_user(
+                                chat_id=user["chat_id"],
+                                token=user["token"],
+                                stocks=user["stocks"],
+                                interval_minutes=user["interval_minutes"],
+                                threshold_percent=user["threshold_percent"]
+                            )
+                        )
+                        tasks.append(task)
+                    else:
+                        print(f"Пропускаем пользователя {user.get('chat_id')} - не хватает данных")
+                except Exception as e:
+                    print(f"Ошибка при запуске мониторинга для пользователя {user.get('chat_id')}: {e}")
+
+            await asyncio.gather(*tasks, return_exceptions=True)
+        except Exception as e:
+            print(f"Критическая ошибка при запуске мониторинга для всех пользователей: {e}")
+
+    async def get_last_prices_with_timestamps(self) -> Dict[str, Tuple[float, datetime]]:
+        """Возвращает словарь с последними ценами и временем запроса для всех акций."""
+        async with self.lock:
+            return self.last_data.copy()

@@ -1,14 +1,16 @@
 import sqlite3
 from typing import List, Optional, Dict, Any
 import json
+from pathlib import Path
 
 class Database:
     def __init__(self, db_name: str = "stocks_bot.db"):
         self.db_name = db_name
         self._create_table()
+        self._create_charts_dir()
 
     def _create_table(self) -> None:
-        """Создаёт таблицу, если её нет."""
+        """Создаёт таблицы, если их нет."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute(
@@ -18,11 +20,16 @@ class Database:
                     token TEXT,
                     stocks TEXT,
                     interval_minutes INTEGER,  
-                    threshold_percent REAL
+                    threshold_percent REAL,
+                    registration_date TEXT DEFAULT CURRENT_TIMESTAMP
                 )
                 """
             )
             conn.commit()
+
+    def _create_charts_dir(self) -> None:
+        """Создаёт директорию для хранения графиков, если её нет."""
+        Path("user_charts").mkdir(exist_ok=True)
 
     def add_user(
         self,
@@ -37,8 +44,8 @@ class Database:
             cursor = conn.cursor()
             cursor.execute(
                 """
-                INSERT INTO users (chat_id, token, stocks, interval_minutes, threshold_percent)
-                VALUES (?, ?, ?, ?, ?)
+                INSERT INTO users (chat_id, token, stocks, interval_minutes, threshold_percent, registration_date)
+                VALUES (?, ?, ?, ?, ?, datetime('now'))
                 ON CONFLICT(chat_id) DO UPDATE SET
                     token = excluded.token,
                     stocks = excluded.stocks,
@@ -54,7 +61,7 @@ class Database:
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT chat_id, token, stocks, interval_minutes, threshold_percent FROM users WHERE chat_id = ?",
+                "SELECT chat_id, token, stocks, interval_minutes, threshold_percent, registration_date FROM users WHERE chat_id = ?",
                 (chat_id,)
             )
             row = cursor.fetchone()
@@ -65,6 +72,7 @@ class Database:
                     "stocks": json.loads(row[2]) if row[2] else [],
                     "interval_minutes": row[3],
                     "threshold_percent": row[4],
+                    "registration_date": row[5]
                 }
             return None
 
@@ -72,7 +80,7 @@ class Database:
         """Возвращает список всех пользователей."""
         with sqlite3.connect(self.db_name) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT chat_id, token, stocks, interval_minutes, threshold_percent FROM users")
+            cursor.execute("SELECT chat_id, token, stocks, interval_minutes, threshold_percent, registration_date FROM users")
             users = []
             for row in cursor.fetchall():
                 users.append({
@@ -81,6 +89,7 @@ class Database:
                     "stocks": json.loads(row[2]) if row[2] else [],
                     "interval_minutes": row[3],
                     "threshold_percent": row[4],
+                    "registration_date": row[5]
                 })
             return users
 
@@ -120,4 +129,38 @@ class Database:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM users WHERE chat_id = ?", (chat_id,))
             conn.commit()
+        
+        # Удаляем все графики пользователя
+        user_chart_dir = Path(f"user_charts/{chat_id}")
+        if user_chart_dir.exists():
+            for file in user_chart_dir.glob("*.png"):
+                file.unlink()
+            user_chart_dir.rmdir()
 
+    def save_chart(self, chat_id: str, ticker: str, chart_data: bytes) -> None:
+        """Сохраняет график для пользователя."""
+        user_chart_dir = Path(f"user_charts/{chat_id}")
+        user_chart_dir.mkdir(exist_ok=True)
+        
+        with open(user_chart_dir / f"{ticker}.png", "wb") as f:
+            f.write(chart_data)
+
+    def get_chart(self, chat_id: str, ticker: str) -> Optional[bytes]:
+        """Возвращает сохранённый график для пользователя."""
+        chart_path = Path(f"user_charts/{chat_id}/{ticker}.png")
+        if chart_path.exists():
+            with open(chart_path, "rb") as f:
+                return f.read()
+        return None
+
+    def get_all_user_charts(self, chat_id: str) -> Dict[str, bytes]:
+        """Возвращает все графики пользователя."""
+        charts = {}
+        user_chart_dir = Path(f"user_charts/{chat_id}")
+        
+        if user_chart_dir.exists():
+            for file in user_chart_dir.glob("*.png"):
+                with open(file, "rb") as f:
+                    charts[file.stem] = f.read()
+        
+        return charts

@@ -1,5 +1,5 @@
 import asyncio
-from aiogram import Bot, Dispatcher, types, F
+from aiogram import Bot, Dispatcher, types
 from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
@@ -8,6 +8,7 @@ from database import Database
 from stock_monitor import StockMonitor
 from tinkoff.invest import AsyncClient
 from tinkoff.invest.exceptions import RequestError
+from stock_chart import StockChartGenerator
 
 class NotificationManager:
     def __init__(self, bot: Bot):
@@ -94,13 +95,13 @@ async def process_stocks(message: types.Message, state: FSMContext):
     
     if invalid_stocks:
         await message.answer(
-            f"Следующие тикеры не найдены или не являются акциями: {', '.join(invalid_stocks)}\n"
+            f"❌ Следующие тикеры не найдены или не являются акциями: {', '.join(invalid_stocks)}\n"
             f"Пожалуйста, введите только существующие тикеры акций:"
         )
         return
     
     if not valid_stocks:
-        await message.answer("Не найдено ни одного валидного тикера. Пожалуйста, попробуйте снова.")
+        await message.answer("❌ Не найдено ни одного валидного тикера. Пожалуйста, попробуйте снова.")
         return
     
     await state.update_data(stocks=valid_stocks)
@@ -144,13 +145,51 @@ async def process_threshold(message: types.Message, state: FSMContext):
     )
     
     await message.answer(
-        "Настройки сохранены! Бот начал мониторинг.\n"
+        "✅ Настройки сохранены! Бот начал мониторинг.\n"
         f"Акции: {', '.join(user_data['stocks'])}\n"
         f"Интервал: {user_data['interval']} мин\n"
         f"Порог: {message.text}%",
         reply_markup=types.ReplyKeyboardRemove()
     )
     await state.clear()
+
+@dp.message(Command("history"))
+async def history_command(message: types.Message):
+    chat_id = str(message.chat.id)
+    user = db.get_user(chat_id)
+    
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    
+    chart_generator = StockChartGenerator(user["token"], db)
+    
+    if not user["stocks"]:
+        await message.answer("У вас нет отслеживаемых акций. Добавьте акции с помощью команды /add_stocks.")
+        return
+    
+    await message.answer("Генерирую графики ваших акций...")
+    
+    try:
+        # Обновляем графики перед отправкой
+        await chart_generator.update_user_charts(chat_id)
+        charts = await chart_generator.get_all_user_charts(chat_id)
+        
+        if not charts:
+            await message.answer("Не удалось загрузить графики. Попробуйте позже.")
+            return
+        
+        for ticker, chart in charts.items():
+            await message.answer_photo(
+                photo=types.BufferedInputFile(chart.getvalue(), filename=f"{ticker}.png"),
+                caption=f"График котировок {ticker}"
+            )
+        
+        await message.answer("Все графики загружены!")
+    
+    except Exception as e:
+        print(f"Error in /history: {e}")
+        await message.answer("Произошла ошибка при загрузке графиков. Попробуйте позже.")
 
 async def on_startup():
     # Запускаем мониторинг при старте бота
