@@ -1,9 +1,8 @@
 from __future__ import annotations
 from typing import Optional, Dict, List, Tuple
-from datetime import datetime, timedelta, timezone
+from datetime import datetime
 import matplotlib.pyplot as plt
 import io
-from tinkoff.invest import AsyncClient, CandleInterval
 from database import Database
 import pytz
 

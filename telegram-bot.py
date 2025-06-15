@@ -4,6 +4,7 @@ from aiogram.filters import Command
 from aiogram.types import ReplyKeyboardMarkup, KeyboardButton
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.context import FSMContext
+from aiogram.utils.keyboard import ReplyKeyboardBuilder
 from database import Database
 from stock_monitor import StockMonitor
 from tinkoff.invest import AsyncClient
@@ -69,11 +70,12 @@ async def check_stock_exists(ticker: str, token: str) -> bool:
     except RequestError:
         return False
 
+
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
     text = (
         "📈 <b>Бот мониторинга акций</b>\n\n"
-        "Вы можете открыть меню команд для ознакомления с возможностями бота"
+        "❓ <b>Вы можете открыть меню команд для ознакомления с возможностями бота</b>\n\n"
         "Отправьте ваш токен Тинькофф Инвестиций для начала работы."
     )
     await message.answer(text, parse_mode="HTML")
@@ -81,7 +83,12 @@ async def cmd_start(message: types.Message, state: FSMContext):
 
 @dp.message(Command("help"))
 async def cmd_help(message: types.Message):
+    builder = ReplyKeyboardBuilder()
+    builder.add(types.KeyboardButton(text="/help"))
+    builder.add(types.KeyboardButton(text="/start"))
+    builder.adjust(2)
     text = (
+        "ℹ️ <b>Справка по боту</b>\n\n"
         "<b>Доступные команды:</b>\n"
         "/stocks - изменить список акций\n"
         "/interval - изменить интервал проверки котировок акций\n"
@@ -89,7 +96,9 @@ async def cmd_help(message: types.Message):
         "/history - просмотреть графики с историей котировок отслеживаемых акций\n\n"
         "Вы также можете открыть меню команд (кнопка справа от поля ввода)"
     )
-    await message.answer(text, parse_mode="HTML")
+    await message.answer(text, 
+                    parse_mode="HTML",
+                    reply_markup=builder.as_markup(resize_keyboard=True))
 
 @dp.message(Form.waiting_for_token)
 async def process_token(message: types.Message, state: FSMContext):
@@ -343,9 +352,55 @@ async def process_new_threshold(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Порог изменения цены обновлен: {new_threshold}%", reply_markup=types.ReplyKeyboardRemove())
     await state.clear()
 
+@dp.message()
+async def handle_unknown_commands(message: types.Message):
+    # Проверяем, является ли сообщение командой (начинается с /)
+    if message.text.startswith('/'):
+        # Создаем клавиатуру с кнопками
+        builder = ReplyKeyboardBuilder()
+        builder.add(types.KeyboardButton(text="/help"))
+        builder.add(types.KeyboardButton(text="/start"))
+        builder.adjust(2)  # Располагаем кнопки в 2 колонки
+        
+        await message.answer(
+            "🤖 Я не понимаю эту команду.\n\n"
+            "Пожалуйста, используйте кнопки ниже или введите одну из доступных команд:\n"
+            "- /start - начать работу\n"
+            "- /help - получить справку",
+            reply_markup=builder.as_markup(resize_keyboard=True)
+        )
+    else:
+        # Если это не команда, а просто текст, можно обработать иначе
+        # Например, предложить ввести команду /help
+        builder = ReplyKeyboardBuilder()
+        builder.add(types.KeyboardButton(text="/help"))
+        builder.add(types.KeyboardButton(text="/start"))
+        builder.adjust(2)
+        
+        await message.answer(
+            "🤖 Я понимаю только конкретные команды.\n\n"
+            "Пожалуйста, используйте кнопки ниже или введите одну из доступных команд:\n"
+            "- /start - начать работу\n"
+            "- /help - получить справку",
+            reply_markup=builder.as_markup(resize_keyboard=True)
+        )
+
 async def on_startup():
+    # Устанавливаем описание бота
+    await bot.set_my_description(
+        "📈 Бот для мониторинга акций на Tinkoff Invest\n\n"
+        "Отслеживает резкие изменения цен и уведомляет о аномалиях. "
+        "Просто укажите интересующие акции и порог изменения цены."
+    )
+    
+    # Устанавливаем краткое описание (отображается в чате)
+    await bot.set_my_short_description(
+        "Мониторинг акций и уведомления о резких изменениях цен"
+    )
+
     # Устанавливаем меню команд
     await bot.set_my_commands([
+        types.BotCommand(command="help", description="Подробнее ознакомиться с возможностями"),
         types.BotCommand(command="start", description="Начать работу с ботом"),
         types.BotCommand(command="stocks", description="Изменить список акций"),
         types.BotCommand(command="interval", description="Изменить интервал проверки"),

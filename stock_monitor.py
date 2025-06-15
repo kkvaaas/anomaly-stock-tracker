@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Optional, Dict, Tuple
-from datetime import datetime, timedelta
+from datetime import datetime
 from tinkoff.invest import AsyncClient
 from database import Database
 
@@ -85,7 +85,7 @@ class StockMonitor:
                 self.last_data[ticker] = (current_price, timestamp)
                 return
 
-            prev_price, prev_timestamp = prev_data
+            prev_price, _ = prev_data
             change_percent = abs((current_price - prev_price) / prev_price) * 100
 
             if change_percent >= threshold:

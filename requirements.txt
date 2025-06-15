@@ -1,6 +1,4 @@
-yfinance
-pandas
-tk
-python-telegram-bot
-pytz
-matplotlib
+aiogram>=3.0
+tinkoff-invest>=1.0.2
+matplotlib>=3.0
+pytz>=2023.0
