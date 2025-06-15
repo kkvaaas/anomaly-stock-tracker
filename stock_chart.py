@@ -20,8 +20,8 @@ class StockChartGenerator:
 
     def generate_line_chart(self, ticker: str, prices: List[float], times: List[datetime]) -> io.BytesIO:
         """Генерирует точный график с корректными точками начала и конца"""
+
         buf = io.BytesIO()
-        
         # Проверка данных
         if not prices or not times or len(prices) != len(times):
             plt.figure(figsize=(8, 4))

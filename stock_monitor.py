@@ -79,10 +79,6 @@ class StockMonitor:
         except Exception as e:
             print(f"Ошибка сохранения данных: {e}")
 
-        # Проверяем, что данные сохранились
-        prices, times = self.db.get_price_history_since(ticker, datetime.now() - timedelta(days=1))
-        print(f"Проверка сохраненных данных: {len(prices)} записей для {ticker}")
-
         async with self.lock:
             prev_data = self.last_data.get(ticker)
             if prev_data is None:

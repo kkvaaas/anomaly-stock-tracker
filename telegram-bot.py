@@ -30,6 +30,9 @@ class Form(StatesGroup):
     waiting_for_stocks = State()
     waiting_for_interval = State()
     waiting_for_threshold = State()
+    waiting_for_new_stocks = State()
+    waiting_for_new_interval = State()
+    waiting_for_new_threshold = State()
 
 bot = Bot(token="8133159439:AAEM9ca5jr9CmLFDe8_Zw5pYm3vZcP38T4k")
 dp = Dispatcher()
@@ -68,8 +71,25 @@ async def check_stock_exists(ticker: str, token: str) -> bool:
 
 @dp.message(Command("start"))
 async def cmd_start(message: types.Message, state: FSMContext):
-    await message.answer("Привет! Для начала работы отправьте ваш токен Тинькофф Инвестиций:")
+    text = (
+        "📈 <b>Бот мониторинга акций</b>\n\n"
+        "Вы можете открыть меню команд для ознакомления с возможностями бота"
+        "Отправьте ваш токен Тинькофф Инвестиций для начала работы."
+    )
+    await message.answer(text, parse_mode="HTML")
     await state.set_state(Form.waiting_for_token)
+
+@dp.message(Command("help"))
+async def cmd_help(message: types.Message):
+    text = (
+        "<b>Доступные команды:</b>\n"
+        "/stocks - изменить список акций\n"
+        "/interval - изменить интервал проверки котировок акций\n"
+        "/threshold - изменить порог изменения котировок акций для уведомлений\n"
+        "/history - просмотреть графики с историей котировок отслеживаемых акций\n\n"
+        "Вы также можете открыть меню команд (кнопка справа от поля ввода)"
+    )
+    await message.answer(text, parse_mode="HTML")
 
 @dp.message(Form.waiting_for_token)
 async def process_token(message: types.Message, state: FSMContext):
@@ -193,7 +213,146 @@ async def history_command(message: types.Message):
         print(f"Error in /history: {e}")
         await message.answer("Произошла ошибка при загрузке графиков. Попробуйте позже.")
 
+@dp.message(Command("stocks"))
+async def cmd_stocks(message: types.Message, state: FSMContext):
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    
+    await message.answer("Введите новые тикеры акций через запятую (например: SBER,GAZP,VTBR):")
+    await state.set_state(Form.waiting_for_new_stocks)
+
+@dp.message(Form.waiting_for_new_stocks)
+async def process_new_stocks(message: types.Message, state: FSMContext):
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        await state.clear()
+        return
+    
+    stocks = [s.strip().upper() for s in message.text.split(",")]
+    
+    # Проверяем существование каждой акции
+    invalid_stocks = []
+    valid_stocks = []
+    
+    for ticker in stocks:
+        if await check_stock_exists(ticker, user["token"]):
+            valid_stocks.append(ticker)
+        else:
+            invalid_stocks.append(ticker)
+    
+    if invalid_stocks:
+        await message.answer(
+            f"❌ Следующие тикеры не найдены или не являются акциями: {', '.join(invalid_stocks)}\n"
+            f"Пожалуйста, введите только существующие тикеры акций:"
+        )
+        return
+    
+    if not valid_stocks:
+        await message.answer("❌ Не найдено ни одного валидного тикера. Пожалуйста, попробуйте снова.")
+        return
+    
+    # Обновляем в базе данных
+    db.update_stocks(str(message.chat.id), valid_stocks)
+    
+    # Обновляем в мониторинге
+    await monitor.start_monitoring_for_user(
+        chat_id=str(message.chat.id),
+        token=user["token"],
+        stocks=valid_stocks,
+        interval_minutes=user["interval_minutes"],
+        threshold_percent=user["threshold_percent"]
+    )
+    
+    await message.answer(f"✅ Список акций обновлен: {', '.join(valid_stocks)}")
+    await state.clear()
+
+@dp.message(Command("interval"))
+async def cmd_interval(message: types.Message, state: FSMContext):
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    
+    await message.answer("Выберите новый интервал проверки (в минутах):", reply_markup=interval_keyboard)
+    await state.set_state(Form.waiting_for_new_interval)
+
+@dp.message(Form.waiting_for_new_interval)
+async def process_new_interval(message: types.Message, state: FSMContext):
+    if message.text not in ["1", "3", "5", "10"]:
+        await message.answer("Пожалуйста, выберите один из предложенных вариантов (1, 3, 5, 10):")
+        return
+    
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        await state.clear()
+        return
+    
+    new_interval = int(message.text)
+    db.update_interval(str(message.chat.id), new_interval)
+    
+    # Обновляем в мониторинге
+    await monitor.start_monitoring_for_user(
+        chat_id=str(message.chat.id),
+        token=user["token"],
+        stocks=user["stocks"],
+        interval_minutes=new_interval,
+        threshold_percent=user["threshold_percent"]
+    )
+    
+    await message.answer(f"✅ Интервал проверки обновлен: {new_interval} минут", reply_markup=types.ReplyKeyboardRemove())
+    await state.clear()
+
+@dp.message(Command("threshold"))
+async def cmd_threshold(message: types.Message, state: FSMContext):
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    
+    await message.answer("Выберите новый порог изменения цены (%):", reply_markup=threshold_keyboard)
+    await state.set_state(Form.waiting_for_new_threshold)
+
+@dp.message(Form.waiting_for_new_threshold)
+async def process_new_threshold(message: types.Message, state: FSMContext):
+    if message.text not in ["3", "5", "7", "10"]:
+        await message.answer("Пожалуйста, выберите один из предложенных вариантов (3, 5, 7, 10):")
+        return
+    
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        await state.clear()
+        return
+    
+    new_threshold = float(message.text)
+    db.update_threshold(str(message.chat.id), new_threshold)
+    
+    # Обновляем в мониторинге
+    await monitor.start_monitoring_for_user(
+        chat_id=str(message.chat.id),
+        token=user["token"],
+        stocks=user["stocks"],
+        interval_minutes=user["interval_minutes"],
+        threshold_percent=new_threshold
+    )
+    
+    await message.answer(f"✅ Порог изменения цены обновлен: {new_threshold}%", reply_markup=types.ReplyKeyboardRemove())
+    await state.clear()
+
 async def on_startup():
+    # Устанавливаем меню команд
+    await bot.set_my_commands([
+        types.BotCommand(command="start", description="Начать работу с ботом"),
+        types.BotCommand(command="stocks", description="Изменить список акций"),
+        types.BotCommand(command="interval", description="Изменить интервал проверки"),
+        types.BotCommand(command="threshold", description="Изменить порог уведомлений"),
+        types.BotCommand(command="history", description="Показать историю цен")
+    ])
+    
     # Запускаем мониторинг при старте бота
     await monitor.start_monitoring_for_all_users()
 
