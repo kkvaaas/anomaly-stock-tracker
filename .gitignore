@@ -1,4 +1,4 @@
-stocks_bot.db
+stocks.db
 .idea/
 __pycache__
 user_charts/

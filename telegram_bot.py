@@ -410,11 +410,3 @@ async def on_startup():
     
     # Запускаем мониторинг при старте бота
     await monitor.start_monitoring_for_all_users()
-
-async def main():
-    # Зарегистрируем обработчик запуска
-    dp.startup.register(on_startup)
-    await dp.start_polling(bot)
-
-if __name__ == "__main__":
-    asyncio.run(main())
