@@ -3,3 +3,4 @@ pandas
 tk
 python-telegram-bot
 pytz
+matplotlib

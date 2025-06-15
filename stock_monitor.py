@@ -1,6 +1,6 @@
 import asyncio
 from typing import List, Optional, Dict, Tuple
-from datetime import datetime
+from datetime import datetime, timedelta
 from tinkoff.invest import AsyncClient
 from database import Database
 
@@ -54,7 +54,7 @@ class StockMonitor:
                     tasks.append(task)
                 
                 await asyncio.gather(*tasks, return_exceptions=True)
-                await asyncio.sleep(settings['interval'] * 60)
+                await asyncio.sleep(settings['interval'] * 5)
 
             except asyncio.CancelledError:
                 break
@@ -63,12 +63,25 @@ class StockMonitor:
                 await asyncio.sleep(10)
 
     async def process_single_ticker(self, chat_id: str, token: str, ticker: str, threshold: float):
-        """Обрабатывает один тикер независимо от других"""
+        """Обрабатывает один тикер с проверкой сохранения данных"""
         result = await self.fetch_stock_price(token, ticker)
         if result is None:
+            print(f"Не удалось получить данные для {ticker}")
             return
-        
+            
         current_price, timestamp = result
+
+        # Сохраняем в историю с логгированием
+        print(f"Сохранение данных: {ticker} - {current_price} - {timestamp}")
+        try:
+            self.db.save_price_history(ticker, current_price, timestamp)
+            print("Данные успешно сохранены")
+        except Exception as e:
+            print(f"Ошибка сохранения данных: {e}")
+
+        # Проверяем, что данные сохранились
+        prices, times = self.db.get_price_history_since(ticker, datetime.now() - timedelta(days=1))
+        print(f"Проверка сохраненных данных: {len(prices)} записей для {ticker}")
 
         async with self.lock:
             prev_data = self.last_data.get(ticker)
@@ -85,12 +98,10 @@ class StockMonitor:
                     ticker=ticker,
                     change_percent=change_percent,
                     prev_price=prev_price,
-                    current_price=current_price,
-                    timestamp=timestamp
+                    current_price=current_price
                 )
 
             self.last_data[ticker] = (current_price, timestamp)
-            print(ticker, ":", self.last_data[ticker])
 
     async def start_monitoring_for_user(self, chat_id: str, token: str, stocks: List[str], 
                                       interval_minutes: int, threshold_percent: float):

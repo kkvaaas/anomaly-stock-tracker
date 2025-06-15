@@ -9,6 +9,7 @@ from stock_monitor import StockMonitor
 from tinkoff.invest import AsyncClient
 from tinkoff.invest.exceptions import RequestError
 from stock_chart import StockChartGenerator
+from datetime import datetime, timedelta
 
 class NotificationManager:
     def __init__(self, bot: Bot):
@@ -162,16 +163,16 @@ async def history_command(message: types.Message):
         await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
         return
     
+    # Сначала проверим наличие данных
+    for ticker in user["stocks"]:
+        prices, times = db.get_price_history_since(ticker, datetime.now() - timedelta(days=7))
+        await message.answer(f"Данных для {ticker}: {len(prices)} записей")
+    
+    # Затем генерируем графики
     chart_generator = StockChartGenerator(user["token"], db)
-    
-    if not user["stocks"]:
-        await message.answer("У вас нет отслеживаемых акций. Добавьте акции с помощью команды /add_stocks.")
-        return
-    
-    await message.answer("Генерирую графики ваших акций...")
+    await message.answer("Генерирую графики...")
     
     try:
-        # Обновляем графики перед отправкой
         await chart_generator.update_user_charts(chat_id)
         charts = await chart_generator.get_all_user_charts(chat_id)
         
@@ -182,10 +183,11 @@ async def history_command(message: types.Message):
         for ticker, chart in charts.items():
             await message.answer_photo(
                 photo=types.BufferedInputFile(chart.getvalue(), filename=f"{ticker}.png"),
-                caption=f"График котировок {ticker}"
+                caption=f"График {ticker}"
             )
-        
-        await message.answer("Все графики загружены!")
+    except Exception as e:
+        print(f"Error in /history: {e}")
+        await message.answer("Ошибка при генерации графиков")
     
     except Exception as e:
         print(f"Error in /history: {e}")
