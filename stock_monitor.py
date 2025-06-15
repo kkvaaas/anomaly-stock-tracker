@@ -54,7 +54,7 @@ class StockMonitor:
                     tasks.append(task)
                 
                 await asyncio.gather(*tasks, return_exceptions=True)
-                await asyncio.sleep(settings['interval'] * 5)
+                await asyncio.sleep(settings['interval'] * 60)
 
             except asyncio.CancelledError:
                 break
