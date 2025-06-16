@@ -25,12 +25,21 @@ class NotificationManager:
             f"Текущая цена: {current_price:.2f}"
         )
         await self.bot.send_message(chat_id=chat_id, text=message)
+    
+    async def send_error_alert(self, chat_id: str, error_message: str):
+        message = (
+            f"❌ Ошибка при получении данных:\n"
+            f"{error_message}\n\n"
+            f"Попробуйте позже или проверьте настройки."
+        )
+        await self.bot.send_message(chat_id=chat_id, text=message)
 
 class Form(StatesGroup):
     waiting_for_token = State()
     waiting_for_stocks = State()
     waiting_for_interval = State()
     waiting_for_threshold = State()
+    waiting_for_new_token = State()
     waiting_for_new_stocks = State()
     waiting_for_new_interval = State()
     waiting_for_new_threshold = State()
@@ -90,6 +99,9 @@ async def cmd_help(message: types.Message):
     text = (
         "ℹ️ <b>Справка по боту</b>\n\n"
         "<b>Доступные команды:</b>\n"
+        "/start - начать работу с ботом\n"
+        "/stop - удалить свои данные и остановить бота\n"
+        "/token - изменить токен Tinkoff Invset\n"
         "/stocks - изменить список акций\n"
         "/interval - изменить интервал проверки котировок акций\n"
         "/threshold - изменить порог изменения котировок акций для уведомлений\n"
@@ -232,6 +244,45 @@ async def cmd_stocks(message: types.Message, state: FSMContext):
     await message.answer("Введите новые тикеры акций через запятую (например: SBER,GAZP,VTBR):")
     await state.set_state(Form.waiting_for_new_stocks)
 
+@dp.message(Command("token"))
+async def cmd_token(message: types.Message, state: FSMContext):
+    user = db.get_user(str(message.chat.id))
+    if not user:
+        await message.answer("Вы не зарегистрированы. Используйте /start для регистрации.")
+        return
+    
+    await message.answer(
+        "Введите новый токен Тинькофф Инвестиций:",
+        reply_markup=types.ReplyKeyboardRemove()
+    )
+    await state.set_state(Form.waiting_for_new_token)
+
+@dp.message(Form.waiting_for_new_token)
+async def process_new_token(message: types.Message, state: FSMContext):
+    new_token = message.text.strip()
+    chat_id = str(message.chat.id)
+    
+    # Можно добавить базовую проверку формата токена
+    if len(new_token) < 10:  # Примерная проверка
+        await message.answer("Токен слишком короткий. Пожалуйста, введите корректный токен:")
+        return
+    
+    # Обновляем токен в базе данных
+    db.update_token(chat_id, new_token)
+    
+    # Обновляем мониторинг с новым токеном
+    user = db.get_user(chat_id)
+    await monitor.start_monitoring_for_user(
+        chat_id=chat_id,
+        token=new_token,
+        stocks=user["stocks"],
+        interval_minutes=user["interval_minutes"],
+        threshold_percent=user["threshold_percent"]
+    )
+    
+    await message.answer("✅ Токен успешно обновлен!")
+    await state.clear()
+
 @dp.message(Form.waiting_for_new_stocks)
 async def process_new_stocks(message: types.Message, state: FSMContext):
     user = db.get_user(str(message.chat.id))
@@ -352,6 +403,23 @@ async def process_new_threshold(message: types.Message, state: FSMContext):
     await message.answer(f"✅ Порог изменения цены обновлен: {new_threshold}%", reply_markup=types.ReplyKeyboardRemove())
     await state.clear()
 
+@dp.message(Command("stop"))
+async def cmd_stop(message: types.Message):
+    chat_id = str(message.chat.id)
+    user = db.get_user(chat_id)
+    
+    if not user:
+        await message.answer("Вы не зарегистрированы, поэтому нечего удалять.")
+        return
+    
+    # Удаляем пользователя из базы данных (это также удалит его графики)
+    db.delete_user(chat_id)
+    
+    await message.answer(
+        "✅ Ваши данные были полностью удалены.\n"
+        "Если захотите снова использовать бот, просто введите /start"
+    )
+
 @dp.message()
 async def handle_unknown_commands(message: types.Message):
     # Проверяем, является ли сообщение командой (начинается с /)
@@ -402,6 +470,8 @@ async def on_startup():
     await bot.set_my_commands([
         types.BotCommand(command="help", description="Подробнее ознакомиться с возможностями"),
         types.BotCommand(command="start", description="Начать работу с ботом"),
+        types.BotCommand(command="stop", description="Полностью удалить свои данные"),
+        types.BotCommand(command="token", description="Изменить токен доступа"),
         types.BotCommand(command="stocks", description="Изменить список акций"),
         types.BotCommand(command="interval", description="Изменить интервал проверки"),
         types.BotCommand(command="threshold", description="Изменить порог уведомлений"),

@@ -15,7 +15,7 @@ class StockMonitor:
         self.db = Database()
         self.lock = asyncio.Lock()  # Для безопасного доступа к общим данным
 
-    async def fetch_stock_price(self, token: str, ticker: str) -> Optional[Tuple[float, datetime]]:
+    async def fetch_stock_price(self, token: str, ticker: str, chat_id: str = None) -> Optional[Tuple[float, datetime]]:
         """Получает текущую цену акции через Tinkoff API и возвращает кортеж (цена, время запроса)."""
         try:
             async with AsyncClient(token) as client:
@@ -25,14 +25,20 @@ class StockMonitor:
                         figi = instrument.figi
                         break
                 else:
-                    print(f"Тикер {ticker} не найден.")
+                    error_msg = f"Тикер {ticker} не найден."
+                    print(error_msg)
+                    if chat_id:
+                        await self.notification_manager.send_error_alert(chat_id, error_msg)
                     return None
 
                 last_price = (await client.market_data.get_last_prices(figi=[figi])).last_prices[0]
                 price = float(f"{last_price.price.units}.{last_price.price.nano}")
                 return (price, datetime.now())
         except Exception as e:
-            print(f"Ошибка при запросе цены {ticker}: {e}")
+            error_msg = f"Ошибка при запросе цены {ticker}: {str(e)}"
+            print(error_msg)
+            if chat_id:
+                await self.notification_manager.send_error_alert(chat_id, error_msg)
             return None
 
     async def check_anomaly_for_user(self, chat_id: str):
@@ -64,10 +70,10 @@ class StockMonitor:
 
     async def process_single_ticker(self, chat_id: str, token: str, ticker: str, threshold: float):
         """Обрабатывает один тикер с проверкой сохранения данных"""
-        result = await self.fetch_stock_price(token, ticker)
+        result = await self.fetch_stock_price(token, ticker, chat_id)  # Добавлен chat_id для ошибок
         if result is None:
             print(f"Не удалось получить данные для {ticker}")
-            return
+            return  # Ошибка уже обработана в fetch_stock_price
             
         current_price, timestamp = result
 
@@ -77,7 +83,9 @@ class StockMonitor:
             self.db.save_price_history(ticker, current_price, timestamp)
             print("Данные успешно сохранены")
         except Exception as e:
-            print(f"Ошибка сохранения данных: {e}")
+            error_msg = f"Ошибка сохранения данных: {e}"
+            print(error_msg)
+            await self.notification_manager.send_error_alert(chat_id, error_msg)
 
         async with self.lock:
             prev_data = self.last_data.get(ticker)

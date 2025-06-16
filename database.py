@@ -143,6 +143,16 @@ class Database:
                     "registration_date": row[5]
                 })
             return users
+        
+    def update_token(self, chat_id: str, new_token: str) -> None:
+        """Обновляет токен пользователя"""
+        with sqlite3.connect(self.db_path) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE users SET token = ? WHERE chat_id = ?",
+                (new_token, chat_id),
+            )
+            conn.commit()
 
     def update_stocks(self, chat_id: str, stocks: List[str]) -> None:
         """Обновляет список акций пользователя."""
